@@ -23,15 +23,15 @@ OPTIONS_LIST = ['Selecionar Todas'] + ACOES_DISPLAY_LIST
 # --- Função para formatar números como Moeda ---
 def formatar_moeda(valor):
     try:
-        # Tenta usar o locale Brasileiro para formatar
         locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
         return locale.currency(valor, grouping=True)
     except:
-        # Se falhar (comum em servidores), usa uma formatação simples
         return f"R$ {valor:,.2f}"
 
 # --- Função Cacheada para buscar os dados ---
-# Esta é a versão sem o filtro de ÓRGÃO
+# 
+# ***** ESTA É A FUNÇÃO CORRIGIDA *****
+#
 @st.cache_data
 def buscar_dados(ano, acao_cod):
     print(f"Buscando dados para {ano}, Ação {acao_cod}...")
@@ -39,6 +39,14 @@ def buscar_dados(ano, acao_cod):
         df = despesa_detalhada(
             exercicio=ano,
             acao=acao_cod,
+            
+            # --- CORREÇÃO AQUI ---
+            # Pedimos explicitamente para agrupar por estas colunas:
+            gnd=True,
+            fonte=True,
+            uo=True,
+            # ---------------------
+
             inclui_descricoes=True,
             ignore_secure_certificate=True
         )
@@ -75,10 +83,8 @@ if st.sidebar.button("Consultar"):
 
         for i, code in enumerate(codes_to_process):
             desc_loop = ACOES_DICT.get(code, code)
-            # Texto de status atualizado (sem menção ao órgão)
             status_text.info(f"Consultando {i+1}/{len(codes_to_process)}: {desc_loop}...")
             
-            # Chama a função de busca (versão simples, sem órgão)
             dados_acao = buscar_dados(ano_selecionado, code)
             all_data.append(dados_acao)
 
@@ -115,6 +121,7 @@ if st.sidebar.button("Consultar"):
             col_analise1, col_analise2 = st.columns(2)
 
             # --- 2.1 Análise por GND ---
+            # Esta secção irá agora funcionar
             with col_analise1:
                 st.markdown("#### Execução por Natureza de Despesa (GND)")
                 gnd_data = dados.groupby(['GND_cod', 'GND_desc'])['empenhado'].sum().reset_index()
@@ -123,6 +130,7 @@ if st.sidebar.button("Consultar"):
                 st.bar_chart(gnd_data, x='display', y='empenhado')
 
             # --- 2.2 Análise por Fonte de Recursos ---
+            # Esta secção também irá funcionar
             with col_analise2:
                 st.markdown("#### Execução por Fonte de Recursos (Top 10)")
                 fonte_data = dados.groupby(['Fonte_cod', 'Fonte_desc'])['empenhado'].sum().reset_index()
@@ -136,6 +144,7 @@ if st.sidebar.button("Consultar"):
             st.subheader("Quem está Executando (Top 10 UOs)")
             st.markdown("Mostra as Unidades Orçamentárias que mais empenharam recursos para as ações selecionadas.")
             
+            # Esta secção também irá funcionar
             uo_data = dados.groupby(['UO_cod', 'UO_desc'])['empenhado'].sum().reset_index()
             uo_data = uo_data[uo_data['empenhado'] > 0].sort_values('empenhado', ascending=False).head(10)
             uo_data['display'] = uo_data['UO_cod'] + ' - ' + uo_data['UO_desc']
@@ -150,7 +159,6 @@ if st.sidebar.button("Consultar"):
             status_text.empty()
 
         else:
-            # Mensagem de aviso atualizada
             st.warning(f"Nenhum dado encontrado para estas ações em {ano_selecionado}.")
             status_text.empty()
 else:
