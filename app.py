@@ -7,10 +7,6 @@ import locale
 st.set_page_config(page_title="Projetos Marinha - PAC", layout="wide")
 st.title("Projetos Estratégicos da Marinha - Novo PAC")
 
-# --- Constante para focar o dashboard ---
-# Código do Órgão 'Comando da Marinha'
-
-
 # --- Mapeamento das Ações de Interesse ---
 ACOES_DICT = {
     '14T7': 'Tecnologia Nuclear da Marinha (PNM)',
@@ -27,21 +23,22 @@ OPTIONS_LIST = ['Selecionar Todas'] + ACOES_DISPLAY_LIST
 # --- Função para formatar números como Moeda ---
 def formatar_moeda(valor):
     try:
+        # Tenta usar o locale Brasileiro para formatar
         locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
         return locale.currency(valor, grouping=True)
     except:
+        # Se falhar (comum em servidores), usa uma formatação simples
         return f"R$ {valor:,.2f}"
 
 # --- Função Cacheada para buscar os dados ---
-# Agora ela inclui o filtro de ÓRGÃO
+# Esta é a versão sem o filtro de ÓRGÃO
 @st.cache_data
-def buscar_dados(ano, acao_cod, orgao_cod):
-    print(f"Buscando dados para {ano}, Ação {acao_cod}, Órgão {orgao_cod}...")
+def buscar_dados(ano, acao_cod):
+    print(f"Buscando dados para {ano}, Ação {acao_cod}...")
     try:
         df = despesa_detalhada(
             exercicio=ano,
             acao=acao_cod,
-            orgao=orgao_cod,  # <-- NOVO FILTRO APLICADO
             inclui_descricoes=True,
             ignore_secure_certificate=True
         )
@@ -58,8 +55,6 @@ selecoes_usuario = st.sidebar.multiselect(
     "Selecione a(s) Ação(ões)", 
     options=OPTIONS_LIST
 )
-
-st.sidebar.info(f"Este dashboard consulta apenas dados do Órgão 52131 - Comando da Marinha.")
 
 # --- Lógica Principal do Dashboard ---
 if st.sidebar.button("Consultar"):
@@ -80,10 +75,11 @@ if st.sidebar.button("Consultar"):
 
         for i, code in enumerate(codes_to_process):
             desc_loop = ACOES_DICT.get(code, code)
-            status_text.info(f"Consultando {i+1}/{len(codes_to_process)}: {desc_loop} (Órgão {ORGAO_MARINHA_COD})...")
+            # Texto de status atualizado (sem menção ao órgão)
+            status_text.info(f"Consultando {i+1}/{len(codes_to_process)}: {desc_loop}...")
             
-            # Chama a função de busca com o código do ÓRGÃO
-            dados_acao = buscar_dados(ano_selecionado, code, ORGAO_MARINHA_COD)
+            # Chama a função de busca (versão simples, sem órgão)
+            dados_acao = buscar_dados(ano_selecionado, code)
             all_data.append(dados_acao)
 
         status_text.success("Consulta concluída! Gerando análises...")
@@ -92,7 +88,7 @@ if st.sidebar.button("Consultar"):
         
         if not dados.empty:
             
-            # --- SEÇÃO 1: VISÃO GERAL (O que já tínhamos) ---
+            # --- SEÇÃO 1: VISÃO GERAL ---
             st.subheader(f"Visão Geral Consolidada (Ano: {ano_selecionado})")
             
             dotacao_atualizada = dados['loa_mais_credito'].sum()
@@ -114,14 +110,13 @@ if st.sidebar.button("Consultar"):
             
             st.divider()
 
-            # --- SEÇÃO 2: NOVAS ANÁLISES (GND e Fonte) ---
+            # --- SEÇÃO 2: ANÁLISES (GND e Fonte) ---
             st.subheader("Análise Detalhada dos Gastos")
             col_analise1, col_analise2 = st.columns(2)
 
             # --- 2.1 Análise por GND ---
             with col_analise1:
                 st.markdown("#### Execução por Natureza de Despesa (GND)")
-                # Agrupa os dados por GND, somando o empenhado
                 gnd_data = dados.groupby(['GND_cod', 'GND_desc'])['empenhado'].sum().reset_index()
                 gnd_data = gnd_data[gnd_data['empenhado'] > 0].sort_values('empenhado', ascending=False)
                 gnd_data['display'] = gnd_data['GND_cod'] + ' - ' + gnd_data['GND_desc']
@@ -130,7 +125,6 @@ if st.sidebar.button("Consultar"):
             # --- 2.2 Análise por Fonte de Recursos ---
             with col_analise2:
                 st.markdown("#### Execução por Fonte de Recursos (Top 10)")
-                # Agrupa por Fonte, soma, e pega as 10 maiores
                 fonte_data = dados.groupby(['Fonte_cod', 'Fonte_desc'])['empenhado'].sum().reset_index()
                 fonte_data = fonte_data[fonte_data['empenhado'] > 0].sort_values('empenhado', ascending=False).head(10)
                 fonte_data['display'] = fonte_data['Fonte_cod'] + ' - ' + fonte_data['Fonte_desc']
@@ -156,7 +150,8 @@ if st.sidebar.button("Consultar"):
             status_text.empty()
 
         else:
-            st.warning(f"Nenhum dado encontrado para estas ações no Órgão {ORGAO_MARINHA_COD} em {ano_selecionado}.")
+            # Mensagem de aviso atualizada
+            st.warning(f"Nenhum dado encontrado para estas ações em {ano_selecionado}.")
             status_text.empty()
 else:
     st.info("Por favor, selecione os filtros na barra lateral e clique em 'Consultar'.")
