@@ -9,7 +9,7 @@ st.title("Projetos Estratégicos da Marinha - Novo PAC")
 
 # --- Constante para focar o dashboard ---
 # Código do Órgão 'Comando da Marinha'
-ORGAO_MARINHA_COD = "52131" 
+
 
 # --- Mapeamento das Ações de Interesse ---
 ACOES_DICT = {
