@@ -3,9 +3,13 @@ import pandas as pd
 from orcamentobr import despesa_detalhada
 import locale
 
-# --- 1. Configuração da Página e Novo Título ---
+# --- 1. Configuração da Página e Título ---
 st.set_page_config(page_title="Projetos Marinha - PAC", layout="wide")
 st.title("Projetos Estratégicos da Marinha - Novo PAC")
+
+# --- Constante para focar o dashboard ---
+# Código do Órgão 'Comando da Marinha'
+ORGAO_MARINHA_COD = "52131" 
 
 # --- Mapeamento das Ações de Interesse ---
 ACOES_DICT = {
@@ -16,10 +20,8 @@ ACOES_DICT = {
     '1N47': 'Construção Navios-Patrulha 500t (NPa 500t)'
 }
 
-# --- 2. Criar lista formatada (Código + Descrição) ---
+# --- Listas para os filtros ---
 ACOES_DISPLAY_LIST = [f"{cod} - {desc}" for cod, desc in ACOES_DICT.items()]
-
-# --- 3. Criar lista de opções com "Selecionar Todas" ---
 OPTIONS_LIST = ['Selecionar Todas'] + ACOES_DISPLAY_LIST
 
 # --- Função para formatar números como Moeda ---
@@ -31,14 +33,15 @@ def formatar_moeda(valor):
         return f"R$ {valor:,.2f}"
 
 # --- Função Cacheada para buscar os dados ---
-# O cache continua a funcionar por ação individual, o que é ótimo
+# Agora ela inclui o filtro de ÓRGÃO
 @st.cache_data
-def buscar_dados(ano, acao_cod):
-    print(f"Buscando dados para {ano} e {acao_cod}...")
+def buscar_dados(ano, acao_cod, orgao_cod):
+    print(f"Buscando dados para {ano}, Ação {acao_cod}, Órgão {orgao_cod}...")
     try:
         df = despesa_detalhada(
             exercicio=ano,
             acao=acao_cod,
+            orgao=orgao_cod,  # <-- NOVO FILTRO APLICADO
             inclui_descricoes=True,
             ignore_secure_certificate=True
         )
@@ -51,75 +54,109 @@ def buscar_dados(ano, acao_cod):
 st.sidebar.header("Filtros")
 ano_selecionado = st.sidebar.number_input("Selecione o Ano", min_value=2010, max_value=2025, value=2024)
 
-# --- 3. Mudar para st.multiselect ---
 selecoes_usuario = st.sidebar.multiselect(
     "Selecione a(s) Ação(ões)", 
     options=OPTIONS_LIST
 )
 
+st.sidebar.info(f"Este dashboard consulta apenas dados do Órgão 52131 - Comando da Marinha.")
+
 # --- Lógica Principal do Dashboard ---
 if st.sidebar.button("Consultar"):
     
-    # --- 3. Lógica para "Selecionar Todas" ---
+    # Lógica para "Selecionar Todas"
     codes_to_process = []
     if 'Selecionar Todas' in selecoes_usuario:
         codes_to_process = list(ACOES_DICT.keys())
     else:
-        # Extrai apenas o código (ex: '14T7') da string formatada
         codes_to_process = [opt.split(' - ')[0] for opt in selecoes_usuario]
 
     if not codes_to_process:
         st.warning("Por favor, selecione uma ou mais ações e clique em 'Consultar'.")
     else:
-        # --- Loop para buscar dados de MÚLTIPLAS ações ---
+        # Loop para buscar dados de MÚLTIPLAS ações
         all_data = []
-        status_text = st.empty() # Para mostrar o progresso
+        status_text = st.empty() 
 
         for i, code in enumerate(codes_to_process):
-            desc_loop = ACOES_DICT.get(code, code) # Pega a descrição para o status
-            status_text.info(f"Consultando {i+1}/{len(codes_to_process)}: {desc_loop}...")
+            desc_loop = ACOES_DICT.get(code, code)
+            status_text.info(f"Consultando {i+1}/{len(codes_to_process)}: {desc_loop} (Órgão {ORGAO_MARINHA_COD})...")
             
-            dados_acao = buscar_dados(ano_selecionado, code)
+            # Chama a função de busca com o código do ÓRGÃO
+            dados_acao = buscar_dados(ano_selecionado, code, ORGAO_MARINHA_COD)
             all_data.append(dados_acao)
 
-        status_text.success("Consulta concluída! Consolidando dados...")
+        status_text.success("Consulta concluída! Gerando análises...")
         
-        # Consolida todos os dataframes numa única tabela
         dados = pd.concat(all_data, ignore_index=True)
         
         if not dados.empty:
-            st.subheader(f"Resultados Consolidados para o Ano: {ano_selecionado}")
             
-            # --- 1. Métricas Principais (agora somam todas as ações selecionadas) ---
+            # --- SEÇÃO 1: VISÃO GERAL (O que já tínhamos) ---
+            st.subheader(f"Visão Geral Consolidada (Ano: {ano_selecionado})")
+            
             dotacao_atualizada = dados['loa_mais_credito'].sum()
             empenhado = dados['empenhado'].sum()
             liquidado = dados['liquidado'].sum()
             pago = dados['pago'].sum()
 
-            st.markdown("### Execução Orçamentária Total")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Dotação Atualizada", formatar_moeda(dotacao_atualizada))
-            col2.metric("Empenhado", formatar_moeda(empenhado))
-            col3.metric("Liquidado", formatar_moeda(liquidado))
-            col4.metric("Pago", formatar_moeda(pago))
+            col_metrica1, col_metrica2, col_metrica3, col_metrica4 = st.columns(4)
+            col_metrica1.metric("Dotação Atualizada", formatar_moeda(dotacao_atualizada))
+            col_metrica2.metric("Empenhado", formatar_moeda(empenhado))
+            col_metrica3.metric("Liquidado", formatar_moeda(liquidado))
+            col_metrica4.metric("Pago", formatar_moeda(pago))
 
-            # --- 2. Gráfico de Execução (Consolidado) ---
-            st.markdown("### Gráfico da Execução (Consolidado)")
-            dados_grafico = pd.DataFrame({
+            dados_grafico_total = pd.DataFrame({
                 'Valores': [dotacao_atualizada, empenhado, liquidado, pago],
                 'Etapa': ['1. Dotação Atualizada', '2. Empenhado', '3. Liquidado', '4. Pago']
             })
-            st.bar_chart(dados_grafico, x='Etapa', y='Valores')
+            st.bar_chart(dados_grafico_total, x='Etapa', y='Valores', height=300)
+            
+            st.divider()
 
-            # --- 3. Tabela de Dados Detalhada (Consolidada) ---
-            st.markdown(f"### Detalhamento dos Dados ({len(dados)} linhas)")
+            # --- SEÇÃO 2: NOVAS ANÁLISES (GND e Fonte) ---
+            st.subheader("Análise Detalhada dos Gastos")
+            col_analise1, col_analise2 = st.columns(2)
+
+            # --- 2.1 Análise por GND ---
+            with col_analise1:
+                st.markdown("#### Execução por Natureza de Despesa (GND)")
+                # Agrupa os dados por GND, somando o empenhado
+                gnd_data = dados.groupby(['GND_cod', 'GND_desc'])['empenhado'].sum().reset_index()
+                gnd_data = gnd_data[gnd_data['empenhado'] > 0].sort_values('empenhado', ascending=False)
+                gnd_data['display'] = gnd_data['GND_cod'] + ' - ' + gnd_data['GND_desc']
+                st.bar_chart(gnd_data, x='display', y='empenhado')
+
+            # --- 2.2 Análise por Fonte de Recursos ---
+            with col_analise2:
+                st.markdown("#### Execução por Fonte de Recursos (Top 10)")
+                # Agrupa por Fonte, soma, e pega as 10 maiores
+                fonte_data = dados.groupby(['Fonte_cod', 'Fonte_desc'])['empenhado'].sum().reset_index()
+                fonte_data = fonte_data[fonte_data['empenhado'] > 0].sort_values('empenhado', ascending=False).head(10)
+                fonte_data['display'] = fonte_data['Fonte_cod'] + ' - ' + fonte_data['Fonte_desc']
+                st.bar_chart(fonte_data, x='display', y='empenhado')
+            
+            st.divider()
+
+            # --- SEÇÃO 3: ANÁLISE POR UNIDADE ORÇAMENTÁRIA (UO) ---
+            st.subheader("Quem está Executando (Top 10 UOs)")
+            st.markdown("Mostra as Unidades Orçamentárias que mais empenharam recursos para as ações selecionadas.")
+            
+            uo_data = dados.groupby(['UO_cod', 'UO_desc'])['empenhado'].sum().reset_index()
+            uo_data = uo_data[uo_data['empenhado'] > 0].sort_values('empenhado', ascending=False).head(10)
+            uo_data['display'] = uo_data['UO_cod'] + ' - ' + uo_data['UO_desc']
+            st.bar_chart(uo_data, x='display', y='empenhado')
+
+            st.divider()
+
+            # --- SEÇÃO 4: DADOS BRUTOS ---
+            st.subheader(f"Detalhamento dos Dados ({len(dados)} linhas)")
             st.dataframe(dados)
             
-            # Limpa o status
             status_text.empty()
 
         else:
-            st.warning("Nenhum dado encontrado para esta combinação de ano e ações.")
+            st.warning(f"Nenhum dado encontrado para estas ações no Órgão {ORGAO_MARINHA_COD} em {ano_selecionado}.")
             status_text.empty()
 else:
     st.info("Por favor, selecione os filtros na barra lateral e clique em 'Consultar'.")
