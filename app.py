@@ -23,22 +23,51 @@ PROGRAMAS_ACOES = {
 }
 
 # --- 3. Função Cacheada para buscar os dados TOTAIS por Ação ---
+#
+# ***** ESTA É A FUNÇÃO CORRIGIDA *****
+#
 @st.cache_data
 def buscar_dados_acao(ano, acao_cod):
     """
-    Busca os dados de UMA ação, totalizados (sem agrupar por GND, Fonte, etc.)
+    Busca os dados de UMA ação, totalizados.
+    Corrige o erro de "keyword argument repeated".
     """
-    print(f"Buscando DADOS TOTAIS para {ano}, Ação {acao_cod}...")
+    print(f"Buscando DADOS DETALHADOS para {ano}, Ação {acao_cod}...")
     try:
-        df = despesa_detalhada(
+        # 1. Busca os dados detalhados (sem agrupar, o que retorna múltiplas linhas)
+        df_detalhado = despesa_detalhada(
             exercicio=ano,
-            acao=acao_cod,
-            acao=True, # Agrupa pela ação para obter uma linha de total
+            acao=acao_cod, # <-- Este é o FILTRO (ex: '123G')
+            # acao=True,   <-- Esta linha causava o ERRO e foi REMOVIDA
             inclui_descricoes=True,
             ignore_secure_certificate=True
         )
-        # A API retorna: loa, loa_mais_credito, empenhado, liquidado, pago
-        return df.iloc[0] if not df.empty else None
+        
+        if df_detalhado.empty:
+            return None
+            
+        # 2. Soma os valores para obter o TOTAL da ação
+        # Seleciona apenas as colunas numéricas que nos interessam
+        colunas_numericas = ['loa', 'loa_mais_credito', 'empenhado', 'liquidado', 'pago']
+        
+        # Garante que as colunas existem antes de somar
+        colunas_para_somar = [col for col in colunas_numericas if col in df_detalhado.columns]
+        
+        if not colunas_para_somar:
+            return None
+            
+        # .sum() cria uma "Series" (basicamente uma linha de totais)
+        totais_acao = df_detalhado[colunas_para_somar].sum()
+        
+        # 3. Adiciona as descrições (pega da primeira linha dos dados detalhados)
+        # Precisamos do Acao_cod para a lógica de merge depois
+        totais_acao['Acao_cod'] = acao_cod 
+        if 'Acao_desc' in df_detalhado.columns:
+             totais_acao['Acao_desc'] = df_detalhado.iloc[0]['Acao_desc']
+        
+        # Retorna a "Series" (linha) com os totais
+        return totais_acao 
+
     except Exception as e:
         st.error(f"Erro ao consultar o SIOP para a ação {acao_cod}: {e}")
         return None
@@ -78,6 +107,7 @@ if st.sidebar.button("Consultar"):
             dados_linha = buscar_dados_acao(ano_selecionado, acao_cod)
             
             if dados_linha is not None:
+                # Adiciona o nome do Programa e a Descrição manual
                 dados_linha['PROGRAMA_NOME'] = programa
                 dados_linha['ACAO_DESC_MANUAL'] = f"{acao_cod} - {acao_desc.upper()}"
                 all_data.append(dados_linha)
@@ -85,6 +115,7 @@ if st.sidebar.button("Consultar"):
     status_text.success("Consulta concluída! Gerando tabela...")
     
     if all_data:
+        # Converte a lista de "Series" (linhas) em um DataFrame
         dados_brutos = pd.DataFrame(all_data)
         
         # --- 6.2. Processamento e Agrupamento ---
@@ -98,7 +129,7 @@ if st.sidebar.button("Consultar"):
                 display_list.append({
                     'PROGRAMA': programa,
                     'AÇÃO': np.nan,
-                    'LOA': df_programa['loa'].sum(),                 # ADICIONADO
+                    'LOA': df_programa['loa'].sum(),
                     'DOTAÇÃO ATUAL': df_programa['loa_mais_credito'].sum(),
                     'EMPENHADO (c)': df_programa['empenhado'].sum(),
                     'LIQUIDADO': df_programa['liquidado'].sum(), 
@@ -106,14 +137,15 @@ if st.sidebar.button("Consultar"):
                 })
                 
                 # 2. Linhas de Ação
-                for acao_cod in acoes.keys():
-                    df_acao = df_programa[df_programa['Acao_cod'] == acao_cod]
+                for aco_cod_loop in acoes.keys():
+                    # Usa o Acao_cod que adicionamos na função
+                    df_acao = df_programa[df_programa['Acao_cod'] == aco_cod_loop]
                     if not df_acao.empty:
                         row = df_acao.iloc[0]
                         display_list.append({
                             'PROGRAMA': np.nan,
                             'AÇÃO': row['ACAO_DESC_MANUAL'],
-                            'LOA': row['loa'],                     # ADICIONADO
+                            'LOA': row['loa'],
                             'DOTAÇÃO ATUAL': row['loa_mais_credito'],
                             'EMPENHADO (c)': row['empenhado'],
                             'LIQUIDADO': row['liquidado'], 
@@ -124,7 +156,7 @@ if st.sidebar.button("Consultar"):
         display_list.append({
             'PROGRAMA': 'Total Geral',
             'AÇÃO': np.nan,
-            'LOA': dados_brutos['loa'].sum(),                         # ADICIONADO
+            'LOA': dados_brutos['loa'].sum(),
             'DOTAÇÃO ATUAL': dados_brutos['loa_mais_credito'].sum(),
             'EMPENHADO (c)': dados_brutos['empenhado'].sum(),
             'LIQUIDADO': dados_brutos['liquidado'].sum(), 
@@ -137,13 +169,13 @@ if st.sidebar.button("Consultar"):
         # Calcula a coluna de percentual
         df_display['% EMP/DOT'] = (
             df_display['EMPENHADO (c)'] / df_display['DOTAÇÃO ATUAL']
-        ).replace([np.inf, -np.inf], 0)
+        ).replace([np.inf, -np.inf, np.nan], 0) # Adicionado .replace(np.nan, 0) por segurança
 
         # Reordena colunas
         df_display = df_display[[
             'PROGRAMA', 
             'AÇÃO', 
-            'LOA',                  # ADICIONADO
+            'LOA',
             'DOTAÇÃO ATUAL', 
             'EMPENHADO (c)', 
             'LIQUIDADO',            
@@ -158,7 +190,7 @@ if st.sidebar.button("Consultar"):
             df_display.style
                 .apply(style_rows, axis=1) # Aplica o estilo de cor
                 .format({
-                    'LOA': "R$ {:,.2f}",              # ADICIONADO
+                    'LOA': "R$ {:,.2f}",
                     'DOTAÇÃO ATUAL': "R$ {:,.2f}",
                     'EMPENHADO (c)': "R$ {:,.2f}",
                     'LIQUIDADO': "R$ {:,.2f}",     
@@ -174,10 +206,11 @@ if st.sidebar.button("Consultar"):
         st.subheader("Dados Brutos Consolidados (Totais por Ação)")
         # Mostra as colunas relevantes nos dados brutos
         cols_brutas = [
-            'PROGRAMA_NOME', 'ACAO_DESC_MANUAL', 'loa', 'loa_mais_credito', 
+            'PROGRAMA_NOME', 'ACAO_DESC_MANUAL', 'Acao_cod', 'loa', 'loa_mais_credito', 
             'empenhado', 'liquidado', 'pago'
         ]
-        st.dataframe(dados_brutos[cols_brutas])
+        # Filtra para mostrar apenas colunas que realmente existem
+        st.dataframe(dados_brutos[[c for c in cols_brutas if c in dados_brutos.columns]])
         
         status_text.empty()
 
