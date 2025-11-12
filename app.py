@@ -1,165 +1,188 @@
 import streamlit as st
 import pandas as pd
 from orcamentobr import despesa_detalhada
-import locale
+import numpy as np
 
 # --- 1. Configuração da Página e Título ---
-st.set_page_config(page_title="Projetos Marinha - PAC", layout="wide")
-st.title("Projetos Estratégicos da Marinha - Novo PAC")
+st.set_page_config(page_title="Execução PAC - Marinha", layout="wide")
+st.title("Execução do Novo PAC - MB")
 
-# --- Mapeamento das Ações de Interesse ---
-ACOES_DICT = {
-    '14T7': 'Tecnologia Nuclear da Marinha (PNM)',
-    '123G': 'Implantação Estaleiro/Base Naval (PROSUB-Infra)',
-    '123H': 'Construção Submarino Nuclear (PROSUB-SNBR)',
-    '123I': 'Construção Submarinos Convencionais (PROSUB-SBR)',
-    '1N47': 'Construção Navios-Patrulha 500t (NPa 500t)'
+# --- 2. Mapeamento dos Programas e Ações ---
+PROGRAMAS_ACOES = {
+    'PROSUB': {
+        '123G': 'IMPLANTACAO DE ESTALEIRO E BASE NAVAL PARA CONSTRUCAO E MANUTENCAO',
+        '123H': 'CONSTRUCAO DE SUBMARINO DE PROPULSAO NUCLEAR',
+        '123I': 'CONSTRUCAO DE SUBMARINOS CONVENCIONAIS'
+    },
+    'PNM': {
+        '14T7': 'DESENVOLVIMENTO DE SISTEMAS DE TECNOLOGIA NUCLEAR DA MARINHA'
+    },
+    'PRONAPA': {
+        '1N47': 'CONSTRUCAO DE NAVIOS-PATRULHA DE 500 TONELADAS (NPA 500T)'
+    }
 }
 
-# --- Listas para os filtros ---
-ACOES_DISPLAY_LIST = [f"{cod} - {desc}" for cod, desc in ACOES_DICT.items()]
-OPTIONS_LIST = ['Selecionar Todas'] + ACOES_DISPLAY_LIST
-
-# --- Função para formatar números como Moeda ---
-def formatar_moeda(valor):
-    try:
-        locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
-        return locale.currency(valor, grouping=True)
-    except:
-        return f"R$ {valor:,.2f}"
-
-# --- Função Cacheada para buscar os dados ---
-# 
-# ***** ESTA É A FUNÇÃO CORRIGIDA *****
-#
+# --- 3. Função Cacheada para buscar os dados TOTAIS por Ação ---
 @st.cache_data
-def buscar_dados(ano, acao_cod):
-    print(f"Buscando dados para {ano}, Ação {acao_cod}...")
+def buscar_dados_acao(ano, acao_cod):
+    """
+    Busca os dados de UMA ação, totalizados (sem agrupar por GND, Fonte, etc.)
+    """
+    print(f"Buscando DADOS TOTAIS para {ano}, Ação {acao_cod}...")
     try:
         df = despesa_detalhada(
             exercicio=ano,
             acao=acao_cod,
-            
-            # --- CORREÇÃO AQUI ---
-            # Pedimos explicitamente para agrupar por estas colunas:
-            gnd=True,
-            fonte=True,
-            uo=True,
-            # ---------------------
-
+            acao=True, # Agrupa pela ação para obter uma linha de total
             inclui_descricoes=True,
             ignore_secure_certificate=True
         )
-        return df
+        # A API retorna: loa, loa_mais_credito, empenhado, liquidado, pago
+        return df.iloc[0] if not df.empty else None
     except Exception as e:
         st.error(f"Erro ao consultar o SIOP para a ação {acao_cod}: {e}")
-        return pd.DataFrame()
+        return None
 
-# --- Interface do Usuário (Barra Lateral) ---
+# --- 4. Função de Estilo para o DataFrame ---
+def style_rows(row):
+    """Aplica estilo de 'Agrupador' ou 'Total' no DataFrame"""
+    style = ''
+    if pd.isna(row['AÇÃO']) and row['PROGRAMA'] == 'Total Geral':
+        # Linha de Total Geral
+        style = 'background-color: #002060; color: white; font-weight: bold;'
+    elif pd.isna(row['AÇÃO']):
+        # Linha de Programa (PROSUB, PNM, etc.)
+        style = 'background-color: #DDEBF7; font-weight: bold;'
+    
+    return [style] * len(row)
+
+# --- 5. Interface do Usuário (Barra Lateral) ---
 st.sidebar.header("Filtros")
-ano_selecionado = st.sidebar.number_input("Selecione o Ano", min_value=2010, max_value=2025, value=2024)
-
-selecoes_usuario = st.sidebar.multiselect(
-    "Selecione a(s) Ação(ões)", 
-    options=OPTIONS_LIST
+ano_selecionado = st.sidebar.number_input(
+    "Selecione o Ano", 
+    min_value=2010, 
+    max_value=2025, 
+    value=2024
 )
 
-# --- Lógica Principal do Dashboard ---
+# --- 6. Lógica Principal do Dashboard ---
 if st.sidebar.button("Consultar"):
     
-    # Lógica para "Selecionar Todas"
-    codes_to_process = []
-    if 'Selecionar Todas' in selecoes_usuario:
-        codes_to_process = list(ACOES_DICT.keys())
-    else:
-        codes_to_process = [opt.split(' - ')[0] for opt in selecoes_usuario]
+    all_data = []
+    status_text = st.empty() 
 
-    if not codes_to_process:
-        st.warning("Por favor, selecione uma ou mais ações e clique em 'Consultar'.")
-    else:
-        # Loop para buscar dados de MÚLTIPLAS ações
-        all_data = []
-        status_text = st.empty() 
-
-        for i, code in enumerate(codes_to_process):
-            desc_loop = ACOES_DICT.get(code, code)
-            status_text.info(f"Consultando {i+1}/{len(codes_to_process)}: {desc_loop}...")
+    # --- 6.1. Loop de Busca ---
+    for programa, acoes in PROGRAMAS_ACOES.items():
+        for acao_cod, acao_desc in acoes.items():
+            status_text.info(f"Consultando {programa} - {acao_cod}...")
+            dados_linha = buscar_dados_acao(ano_selecionado, acao_cod)
             
-            dados_acao = buscar_dados(ano_selecionado, code)
-            all_data.append(dados_acao)
+            if dados_linha is not None:
+                dados_linha['PROGRAMA_NOME'] = programa
+                dados_linha['ACAO_DESC_MANUAL'] = f"{acao_cod} - {acao_desc.upper()}"
+                all_data.append(dados_linha)
 
-        status_text.success("Consulta concluída! Gerando análises...")
+    status_text.success("Consulta concluída! Gerando tabela...")
+    
+    if all_data:
+        dados_brutos = pd.DataFrame(all_data)
         
-        dados = pd.concat(all_data, ignore_index=True)
+        # --- 6.2. Processamento e Agrupamento ---
+        display_list = []
         
-        if not dados.empty:
+        for programa, acoes in PROGRAMAS_ACOES.items():
+            df_programa = dados_brutos[dados_brutos['PROGRAMA_NOME'] == programa]
             
-            # --- SEÇÃO 1: VISÃO GERAL ---
-            st.subheader(f"Visão Geral Consolidada (Ano: {ano_selecionado})")
-            
-            dotacao_atualizada = dados['loa_mais_credito'].sum()
-            empenhado = dados['empenhado'].sum()
-            liquidado = dados['liquidado'].sum()
-            pago = dados['pago'].sum()
+            if not df_programa.empty:
+                # 1. Linha de Sumário do Programa
+                display_list.append({
+                    'PROGRAMA': programa,
+                    'AÇÃO': np.nan,
+                    'LOA': df_programa['loa'].sum(),                 # ADICIONADO
+                    'DOTAÇÃO ATUAL': df_programa['loa_mais_credito'].sum(),
+                    'EMPENHADO (c)': df_programa['empenhado'].sum(),
+                    'LIQUIDADO': df_programa['liquidado'].sum(), 
+                    'PAGO': df_programa['pago'].sum()               
+                })
+                
+                # 2. Linhas de Ação
+                for acao_cod in acoes.keys():
+                    df_acao = df_programa[df_programa['Acao_cod'] == acao_cod]
+                    if not df_acao.empty:
+                        row = df_acao.iloc[0]
+                        display_list.append({
+                            'PROGRAMA': np.nan,
+                            'AÇÃO': row['ACAO_DESC_MANUAL'],
+                            'LOA': row['loa'],                     # ADICIONADO
+                            'DOTAÇÃO ATUAL': row['loa_mais_credito'],
+                            'EMPENHADO (c)': row['empenhado'],
+                            'LIQUIDADO': row['liquidado'], 
+                            'PAGO': row['pago']               
+                        })
 
-            col_metrica1, col_metrica2, col_metrica3, col_metrica4 = st.columns(4)
-            col_metrica1.metric("Dotação Atualizada", formatar_moeda(dotacao_atualizada))
-            col_metrica2.metric("Empenhado", formatar_moeda(empenhado))
-            col_metrica3.metric("Liquidado", formatar_moeda(liquidado))
-            col_metrica4.metric("Pago", formatar_moeda(pago))
+        # 3. Linha de Total Geral
+        display_list.append({
+            'PROGRAMA': 'Total Geral',
+            'AÇÃO': np.nan,
+            'LOA': dados_brutos['loa'].sum(),                         # ADICIONADO
+            'DOTAÇÃO ATUAL': dados_brutos['loa_mais_credito'].sum(),
+            'EMPENHADO (c)': dados_brutos['empenhado'].sum(),
+            'LIQUIDADO': dados_brutos['liquidado'].sum(), 
+            'PAGO': dados_brutos['pago'].sum()               
+        })
+        
+        # --- 6.3. Cria e Formata o DataFrame Final ---
+        df_display = pd.DataFrame(display_list)
+        
+        # Calcula a coluna de percentual
+        df_display['% EMP/DOT'] = (
+            df_display['EMPENHADO (c)'] / df_display['DOTAÇÃO ATUAL']
+        ).replace([np.inf, -np.inf], 0)
 
-            dados_grafico_total = pd.DataFrame({
-                'Valores': [dotacao_atualizada, empenhado, liquidado, pago],
-                'Etapa': ['1. Dotação Atualizada', '2. Empenhado', '3. Liquidado', '4. Pago']
-            })
-            st.bar_chart(dados_grafico_total, x='Etapa', y='Valores', height=300)
-            
-            st.divider()
+        # Reordena colunas
+        df_display = df_display[[
+            'PROGRAMA', 
+            'AÇÃO', 
+            'LOA',                  # ADICIONADO
+            'DOTAÇÃO ATUAL', 
+            'EMPENHADO (c)', 
+            'LIQUIDADO',            
+            'PAGO',                 
+            '% EMP/DOT'
+        ]]
+        
+        st.subheader(f"Execução Orçamentária por Programa (Ano: {ano_selecionado})")
+        
+        # --- 6.4. Exibe o DataFrame com Estilo ---
+        st.dataframe(
+            df_display.style
+                .apply(style_rows, axis=1) # Aplica o estilo de cor
+                .format({
+                    'LOA': "R$ {:,.2f}",              # ADICIONADO
+                    'DOTAÇÃO ATUAL': "R$ {:,.2f}",
+                    'EMPENHADO (c)': "R$ {:,.2f}",
+                    'LIQUIDADO': "R$ {:,.2f}",     
+                    'PAGO': "R$ {:,.2f}",          
+                    '% EMP/DOT': "{:,.1%}"
+                })
+                .hide(axis="index"), # Esconde o índice (0, 1, 2...)
+            use_container_width=True,
+            height=(len(df_display) + 1) * 35  # Ajusta a altura dinamicamente
+        )
 
-            # --- SEÇÃO 2: ANÁLISES (GND e Fonte) ---
-            st.subheader("Análise Detalhada dos Gastos")
-            col_analise1, col_analise2 = st.columns(2)
+        st.divider()
+        st.subheader("Dados Brutos Consolidados (Totais por Ação)")
+        # Mostra as colunas relevantes nos dados brutos
+        cols_brutas = [
+            'PROGRAMA_NOME', 'ACAO_DESC_MANUAL', 'loa', 'loa_mais_credito', 
+            'empenhado', 'liquidado', 'pago'
+        ]
+        st.dataframe(dados_brutos[cols_brutas])
+        
+        status_text.empty()
 
-            # --- 2.1 Análise por GND ---
-            # Esta secção irá agora funcionar
-            with col_analise1:
-                st.markdown("#### Execução por Natureza de Despesa (GND)")
-                gnd_data = dados.groupby(['GND_cod', 'GND_desc'])['empenhado'].sum().reset_index()
-                gnd_data = gnd_data[gnd_data['empenhado'] > 0].sort_values('empenhado', ascending=False)
-                gnd_data['display'] = gnd_data['GND_cod'] + ' - ' + gnd_data['GND_desc']
-                st.bar_chart(gnd_data, x='display', y='empenhado')
-
-            # --- 2.2 Análise por Fonte de Recursos ---
-            # Esta secção também irá funcionar
-            with col_analise2:
-                st.markdown("#### Execução por Fonte de Recursos (Top 10)")
-                fonte_data = dados.groupby(['Fonte_cod', 'Fonte_desc'])['empenhado'].sum().reset_index()
-                fonte_data = fonte_data[fonte_data['empenhado'] > 0].sort_values('empenhado', ascending=False).head(10)
-                fonte_data['display'] = fonte_data['Fonte_cod'] + ' - ' + fonte_data['Fonte_desc']
-                st.bar_chart(fonte_data, x='display', y='empenhado')
-            
-            st.divider()
-
-            # --- SEÇÃO 3: ANÁLISE POR UNIDADE ORÇAMENTÁRIA (UO) ---
-            st.subheader("Quem está Executando (Top 10 UOs)")
-            st.markdown("Mostra as Unidades Orçamentárias que mais empenharam recursos para as ações selecionadas.")
-            
-            # Esta secção também irá funcionar
-            uo_data = dados.groupby(['UO_cod', 'UO_desc'])['empenhado'].sum().reset_index()
-            uo_data = uo_data[uo_data['empenhado'] > 0].sort_values('empenhado', ascending=False).head(10)
-            uo_data['display'] = uo_data['UO_cod'] + ' - ' + uo_data['UO_desc']
-            st.bar_chart(uo_data, x='display', y='empenhado')
-
-            st.divider()
-
-            # --- SEÇÃO 4: DADOS BRUTOS ---
-            st.subheader(f"Detalhamento dos Dados ({len(dados)} linhas)")
-            st.dataframe(dados)
-            
-            status_text.empty()
-
-        else:
-            st.warning(f"Nenhum dado encontrado para estas ações em {ano_selecionado}.")
-            status_text.empty()
+    else:
+        st.warning(f"Nenhum dado encontrado para estas ações em {ano_selecionado}.")
+        status_text.empty()
 else:
-    st.info("Por favor, selecione os filtros na barra lateral e clique em 'Consultar'.")
+    st.info("Por favor, selecione o ano na barra lateral e clique em 'Consultar'.")
